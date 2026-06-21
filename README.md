@@ -23,81 +23,118 @@ Step 14:Update margins and display the graph using matplotlib.pyplot<br/>
 
 ## Program:
 ```py
-import networkx as nx
 import pandas as pd
+import networkx as nx
 import matplotlib.pyplot as plt
+
 from pybbn.graph.dag import Bbn
-from pybbn.graph.edge import Edge, EdgeType
-from pybbn.graph.jointree import EvidenceBuilder
 from pybbn.graph.node import BbnNode
 from pybbn.graph.variable import Variable
+from pybbn.graph.edge import Edge, EdgeType
 from pybbn.pptc.inferencecontroller import InferenceController
-pd.options.display.max_columns=50
 
-df = pd.read_csv('weatherAUS.csv', encoding='utf-8')
-df = df[pd.isnull(df['RainTomorrow']) == False]
+df = pd.read_csv("weatherAUS.csv")
 
+df = df.dropna(subset=["RainTomorrow"])
 
-num_cols = df.select_dtypes(include='number').columns
-cat_cols = df.select_dtypes(exclude='number').columns
+df = df.fillna(df.mode().iloc[0])
 
-df[num_cols] = df[num_cols].fillna(df[num_cols].mean())
-df[cat_cols] = df[cat_cols].fillna(df[cat_cols].mode().iloc[0])
+df["H9"] = df["Humidity9am"].apply(
+    lambda x: ">60" if x > 60 else "<=60"
+)
 
-df['WindGustSpeedCat'] = df['WindGustSpeed'].apply(lambda x: '0.<=40' if x <= 40 else '1.40-50' if 40 < x <= 50 else '2.>50')
-df['Humidity9amCat'] = df['Humidity9am'].apply(lambda x: '1.>60' if x > 60 else '0.<=60')
-df['Humidity3pmCat'] = df['Humidity3pm'].apply(lambda x: '1.>60' if x > 60 else '0.<=60')
+df["H3"] = df["Humidity3pm"].apply(
+    lambda x: ">60" if x > 60 else "<=60"
+)
 
-print(df.head())
+df["W"] = df["WindGustSpeed"].apply(
+    lambda x: "<=40" if x <= 40 else "40-50" if x <= 50 else ">50"
+)
 
-def probs(data, child, parent1=None, parent2=None):
-    if parent1 is None:
-        prob = pd.crosstab(data[child], 'Empty', margins=False, normalize='columns').sort_index().to_numpy().reshape(-1).tolist()
-    elif parent1 is not None:
-        if parent2 is None:
-            prob = pd.crosstab(data[parent1], data[child], margins=False, normalize='index').sort_index().to_numpy().reshape(-1).tolist()
-        else:
-            prob = pd.crosstab([data[parent1], data[parent2]], data[child], margins=False, normalize='index').sort_index().to_numpy().reshape(-1).tolist()
-    else:
-        print("Error in Probability Frequency Calculations")
-    return prob
+p1 = pd.crosstab(
+    df["H9"],
+    columns="count",
+    normalize=True
+).values.flatten().tolist()
 
-H9am = BbnNode(Variable(0, 'H9am', ['<=60', '>60']), probs(df, child='Humidity9amCat'))
-H3pm = BbnNode(Variable(1, 'H3pm', ['<=60', '>60']), probs(df, child='Humidity3pmCat', parent1='Humidity9amCat'))
-W = BbnNode(Variable(2, 'W', ['<=40', '40-50', '>50']), probs(df, child='WindGustSpeedCat'))
-RT = BbnNode(Variable(3, 'RT', ['No', 'Yes']), probs(df, child='RainTomorrow', parent1='Humidity3pmCat', parent2='WindGustSpeedCat'))
+p2 = pd.crosstab(
+    df["H9"],
+    df["H3"],
+    normalize="index"
+).values.flatten().tolist()
+
+p3 = pd.crosstab(
+    df["W"],
+    columns="count",
+    normalize=True
+).values.flatten().tolist()
+
+p4 = pd.crosstab(
+    [df["H3"], df["W"]],
+    df["RainTomorrow"],
+    normalize="index"
+).values.flatten().tolist()
+
+H9 = BbnNode(
+    Variable(0, "H9", ["<=60", ">60"]),
+    p1
+)
+
+H3 = BbnNode(
+    Variable(1, "H3", ["<=60", ">60"]),
+    p2
+)
+
+W = BbnNode(
+    Variable(2, "W", ["<=40", "40-50", ">50"]),
+    p3
+)
+
+RT = BbnNode(
+    Variable(3, "RT", ["No", "Yes"]),
+    p4
+)
 
 bbn = Bbn() \
-    .add_node(H9am) \
-    .add_node(H3pm) \
+    .add_node(H9) \
+    .add_node(H3) \
     .add_node(W) \
     .add_node(RT) \
-    .add_edge(Edge(H9am, H3pm, EdgeType.DIRECTED)) \
-    .add_edge(Edge(H3pm, RT, EdgeType.DIRECTED)) \
+    .add_edge(Edge(H9, H3, EdgeType.DIRECTED)) \
+    .add_edge(Edge(H3, RT, EdgeType.DIRECTED)) \
     .add_edge(Edge(W, RT, EdgeType.DIRECTED))
 
 join_tree = InferenceController.apply(bbn)
 
-pos = {0: (-1, 2), 1: (-1, 0.5), 2: (1, 0.5), 3: (0, -1)}
+print("RainTomorrow Probabilities:\n")
 
-options = {
-    "font_size": 16,
-    "node_size": 4000,
-    "node_color": "pink",
-    "edgecolors": "blue",
-    "edge_color": "green",
-    "linewidths": 5,
-    "width": 5,
+potential = join_tree.get_bbn_potential(RT)
+
+for entry in potential.entries:
+    print(entry)
+
+g, labels = bbn.to_nx_graph()
+
+pos = {
+    0: (-1, 2),
+    1: (-1, 0.5),
+    2: (1, 0.5),
+    3: (0, -1)
 }
 
-n, d = bbn.to_nx_graph()
-nx.draw(n, with_labels=True, labels=d, pos=pos, **options)
+nx.draw_networkx(
+    g,
+    labels=labels,
+    pos=pos,
+    node_size=4000,
+    node_color="pink",
+    edge_color="green",
+    font_size=14,
+    width=3
+)
 
-ax = plt.gca()
-ax.margins(0.10)
 plt.axis("off")
 plt.show()
-
 
 ```
 
